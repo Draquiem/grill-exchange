@@ -25,3 +25,37 @@ export const isFamous = (name) => normalizeName(name) === FAMOUS.match;
 /** Ids of everyone in the party who currently qualifies. */
 export const famousIds = (people) =>
   (people || []).filter((p) => isFamous(p.name)).map((p) => p.id);
+
+/* -------------------------------------------------------------------- */
+
+/**
+ * SOJU WATCH
+ *
+ * Counts soju across the whole table — every diner plus the shared bucket —
+ * and drops a dry aside once the table is deep enough in it.
+ *
+ * Unlike the 6mildil line, these stay in house voice. A deadpan safety
+ * question is funnier than an enthusiastic one, and the joke should never
+ * read as cheering the table on.
+ */
+export const SOJU_ID = "soju";
+
+export const SOJU_TIERS = [
+  { at: 5, line: "That is five soju on the book. You have a designated driver, right?" },
+  { at: 8, line: "Eight soju. The grill has gone unattended for some time now." },
+  { at: 12, line: "Twelve soju. This position gets reviewed tomorrow, painfully." },
+];
+
+/** Total of one item across every owner, shared bucket included. */
+export const countItem = (counts, itemId) =>
+  Object.values(counts || {}).reduce(
+    (sum, bucket) => sum + ((bucket && bucket[itemId]) || 0),
+    0
+  );
+
+/** Highest tier the count has reached, or null below the first threshold. */
+export const sojuTier = (n) => {
+  let hit = null;
+  for (const t of SOJU_TIERS) if (n >= t.at) hit = t;
+  return hit;
+};

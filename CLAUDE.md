@@ -113,6 +113,17 @@ message and fires confetti, and marks their chip with a mic and an ember glow.
   (opacity 1, no transform) so stripping the animation still leaves it
   readable. Never move that reveal into the keyframes only.
 
+**Soju watch.** Five soju across the whole table — every diner plus the shared
+bucket — drops a dry aside at the bottom of the screen. Escalates at 8 and 12.
+
+- These lines stay in house voice, unlike the 6mildil one. A deadpan safety
+  question is funnier than an enthusiastic one, and the joke must never read
+  as cheering the table on. Keep it that way if you add a tier.
+- Each tier fires once. Going 8 -> 7 -> 8 does not re-fire, so tapping minus
+  and plus can't spam it; dropping under 5 re-arms everything.
+- Same reduced-motion rule as above: `.gx-aside` is visible at rest and the
+  animation only adds motion.
+
 ## Open decisions (unbuilt, roughly in priority order)
 
 1. ~~**Shareable receipt.**~~ Done Aug 2026. `receipt.js` draws a settlement to

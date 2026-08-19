@@ -9,7 +9,14 @@ import {
   ownerCount,
 } from "./party.js";
 import { drawReceipt, canvasToBlob, fontsReady } from "./receipt.js";
-import { FAMOUS, isFamous, famousIds } from "./easterEggs.js";
+import {
+  FAMOUS,
+  isFamous,
+  famousIds,
+  SOJU_ID,
+  countItem,
+  sojuTier,
+} from "./easterEggs.js";
 import { confettiBurst } from "./confetti.js";
 import "./GrillExchange.css";
 
@@ -35,10 +42,13 @@ export default function GrillExchange() {
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
   const [famousHit, setFamousHit] = useState(0);
+  const [aside, setAside] = useState(null);
 
   const firstRun = useRef(true);
   const celebrated = useRef(new Set());
   const cancelConfetti = useRef(null);
+  const sojuSeen = useRef(0);
+  const asideSeq = useRef(0);
   const coverEach = parseFloat(cover) || 0;
 
   const d = useMemo(
@@ -118,6 +128,27 @@ export default function GrillExchange() {
     const t = setTimeout(() => setFamousHit(0), 4200);
     return () => clearTimeout(t);
   }, [famousHit]);
+
+  // Easter egg: the table is working through the soju. Each tier fires once;
+  // dropping back under the first threshold re-arms the whole thing. Coming
+  // down from 8 to 6 does not re-fire 5, so tapping minus can't spam it.
+  useEffect(() => {
+    const tier = sojuTier(countItem(party.counts, SOJU_ID));
+    if (!tier) {
+      sojuSeen.current = 0;
+      return;
+    }
+    if (tier.at <= sojuSeen.current) return;
+    sojuSeen.current = tier.at;
+    asideSeq.current += 1;
+    setAside({ line: tier.line, seq: asideSeq.current });
+  }, [party.counts]);
+
+  useEffect(() => {
+    if (!aside) return;
+    const t = setTimeout(() => setAside(null), 5200);
+    return () => clearTimeout(t);
+  }, [aside]);
 
   useEffect(
     () => () => {
@@ -563,6 +594,15 @@ export default function GrillExchange() {
             </span>
             <p className="gx-famous-msg">{FAMOUS.message}</p>
           </div>
+        </div>
+      )}
+
+      {aside && (
+        <div className="gx-aside" key={aside.seq} role="status" aria-live="polite">
+          <span className="gx-aside-i" aria-hidden="true">
+            🍶
+          </span>
+          <p className="gx-aside-t">{aside.line}</p>
         </div>
       )}
 

@@ -256,3 +256,21 @@
   100%{opacity:0;transform:scale(.98) translateY(-8px);}
 }
 @keyframes gx-mic{from{transform:rotate(-9deg);}to{transform:rotate(9deg);}}
+
+/* ---- easter egg: soju watch ---------------------------------------- */
+/* Amber, not ember — this is the caution tone, not a loss. Base state is
+   visible so reduced-motion still shows it, same as .gx-famous-card. */
+.gx-aside{position:fixed;left:16px;right:16px;bottom:22px;z-index:55;
+  display:flex;align-items:flex-start;gap:12px;margin:0 auto;max-width:420px;
+  background:var(--slab2);border:1px solid var(--amber);border-radius:12px;
+  padding:14px 16px;pointer-events:none;
+  box-shadow:0 16px 44px rgba(0,0,0,.55);
+  animation:gx-aside-in 5200ms cubic-bezier(.2,1.1,.3,1) forwards;}
+.gx-aside-i{font-size:22px;line-height:1.15;flex:none;}
+.gx-aside-t{margin:0;font-size:12.5px;line-height:1.5;color:var(--bone);}
+@keyframes gx-aside-in{
+  0%{opacity:0;transform:translateY(14px);}
+  6%{opacity:1;transform:none;}
+  90%{opacity:1;transform:none;}
+  100%{opacity:0;transform:translateY(8px);}
+}
