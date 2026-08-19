@@ -9,6 +9,8 @@ import {
   ownerCount,
 } from "./party.js";
 import { drawReceipt, canvasToBlob, fontsReady } from "./receipt.js";
+import { FAMOUS, isFamous, famousIds } from "./easterEggs.js";
+import { confettiBurst } from "./confetti.js";
 import "./GrillExchange.css";
 
 const verdictFor = (ratio) =>
@@ -32,8 +34,11 @@ export default function GrillExchange() {
   const [sheet, setSheet] = useState(null); // { url, blob } once a receipt is drawn
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
+  const [famousHit, setFamousHit] = useState(0);
 
   const firstRun = useRef(true);
+  const celebrated = useRef(new Set());
+  const cancelConfetti = useRef(null);
   const coverEach = parseFloat(cover) || 0;
 
   const d = useMemo(
@@ -94,6 +99,32 @@ export default function GrillExchange() {
     const t = setTimeout(() => setNote(""), 2600);
     return () => clearTimeout(t);
   }, [note]);
+
+  // Easter egg: fire once when someone in the party *becomes* famous. Renaming
+  // away drops them from the set, so renaming back celebrates again.
+  useEffect(() => {
+    const ids = new Set(famousIds(party.people));
+    let fresh = false;
+    for (const id of ids) if (!celebrated.current.has(id)) fresh = true;
+    celebrated.current = ids;
+    if (!fresh) return;
+    if (cancelConfetti.current) cancelConfetti.current();
+    cancelConfetti.current = confettiBurst();
+    setFamousHit((n) => n + 1);
+  }, [party.people]);
+
+  useEffect(() => {
+    if (!famousHit) return;
+    const t = setTimeout(() => setFamousHit(0), 4200);
+    return () => clearTimeout(t);
+  }, [famousHit]);
+
+  useEffect(
+    () => () => {
+      if (cancelConfetti.current) cancelConfetti.current();
+    },
+    []
+  );
 
   // Object URLs are revoked when the sheet closes or is replaced.
   useEffect(() => () => sheet && URL.revokeObjectURL(sheet.url), [sheet]);
@@ -274,11 +305,15 @@ export default function GrillExchange() {
               className={
                 "gx-chip" +
                 (party.activeId === l.id ? " on" : "") +
-                (l.started ? " t-" + l.verdict.tone : "")
+                (l.started ? " t-" + l.verdict.tone : "") +
+                (isFamous(l.name) ? " famous" : "")
               }
               onClick={() => dispatch({ type: "set_active", id: l.id })}
             >
-              <span className="gx-chip-n">{l.name}</span>
+              <span className="gx-chip-n">
+                {isFamous(l.name) && <span aria-hidden="true">🎤 </span>}
+                {l.name}
+              </span>
               <span className="gx-chip-v">
                 {l.started ? l.ratio.toFixed(2) + "×" : "—"}
               </span>
@@ -516,6 +551,17 @@ export default function GrillExchange() {
                 Close
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {famousHit > 0 && (
+        <div className="gx-famous" key={famousHit} role="status" aria-live="polite">
+          <div className="gx-famous-card">
+            <span className="gx-famous-mic" aria-hidden="true">
+              🎤
+            </span>
+            <p className="gx-famous-msg">{FAMOUS.message}</p>
           </div>
         </div>
       )}

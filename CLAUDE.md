@@ -29,6 +29,8 @@ target. If a feature idea needs that to work, the feature is wrong.
 | `src/menu.js` | All menu data, category ordering, verdict tiers. The only file you touch to retune values or add items. |
 | `src/party.js` | Party reducer + all the per-person money math. Pure, no React, no menu import — so it can be unit-tested directly under node. |
 | `src/receipt.js` | Canvas renderer for the shareable receipt. |
+| `src/easterEggs.js` | Trigger predicates for easter eggs. Pure, so "what fires" is testable apart from the effect that celebrates it. |
+| `src/confetti.js` | Hand-rolled canvas confetti burst. Returns a cancel function. |
 | `src/GrillExchange.jsx` | The component. Wiring and markup. |
 | `src/GrillExchange.css` | All styling, scoped under `.gx-root`. |
 | `src/main.jsx` | Entry point. |
@@ -89,6 +91,27 @@ absurd premise completely seriously. Labels are trading vocabulary ("Position",
 "Cover / person", "Filled"). Verdict lines are one sentence and land on an
 image, not a punchline — "The manager knows your face," not "LOL you ate so
 much!!" No exclamation marks anywhere in the UI.
+
+**One deliberate exception:** the 6mildil easter egg message in
+`easterEggs.js` is enthusiastic and ends in an exclamation mark. That is the
+joke — the desk drops its deadpan for exactly one person, which only works
+because the rest of the app never does. Do not normalise its punctuation, and
+do not treat it as licence for a second one.
+
+## Easter eggs
+
+Naming a party member `6mildil` (case-insensitive, whitespace-trimmed) pops a
+message and fires confetti, and marks their chip with a mic and an ember glow.
+
+- Fires on the *transition* into being famous, tracked per person id. Renaming
+  away drops them from the set, so renaming back fires again. Two people can
+  both be famous; each triggers once.
+- `confettiBurst()` returns a cancel function. The component calls it on
+  unmount and before starting a new burst, so canvases never pile up.
+- Both the confetti and the message respect `prefers-reduced-motion`: the
+  burst becomes a no-op, and the card's base state is deliberately visible
+  (opacity 1, no transform) so stripping the animation still leaves it
+  readable. Never move that reveal into the keyframes only.
 
 ## Open decisions (unbuilt, roughly in priority order)
 
