@@ -1,56 +1,84 @@
-import { useState, useMemo, useRef, useEffect } from "react";
+import { useState, useMemo, useRef, useEffect, useReducer, useCallback } from "react";
 import { ITEMS, CAT_ORDER, VERDICTS } from "./menu.js";
+import {
+  TABLE,
+  money,
+  initParty,
+  partyReducer,
+  derive,
+  ownerCount,
+} from "./party.js";
+import { drawReceipt, canvasToBlob, fontsReady } from "./receipt.js";
 import "./GrillExchange.css";
 
-const money = (n) =>
-  "$" + n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const verdictFor = (ratio) =>
+  VERDICTS.find((v) => ratio < v.max) || VERDICTS[VERDICTS.length - 1];
+
+const stamp = () =>
+  new Date().toLocaleString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
 
 export default function GrillExchange() {
   const [mode, setMode] = useState("kbbq");
-  const [counts, setCounts] = useState({});
   const [cover, setCover] = useState("34.99");
-  const [diners, setDiners] = useState(1);
   const [minutes, setMinutes] = useState(90);
+  const [party, dispatch] = useReducer(partyReducer, undefined, initParty);
   const [flash, setFlash] = useState(0);
+  const [sheet, setSheet] = useState(null); // { url, blob } once a receipt is drawn
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState("");
 
   const firstRun = useRef(true);
+  const coverEach = parseFloat(cover) || 0;
 
-  const paid = (parseFloat(cover) || 0) * diners;
-
-  const eaten = useMemo(
-    () => ITEMS.reduce((sum, it) => sum + (counts[it.id] || 0) * it.v, 0),
-    [counts]
+  const d = useMemo(
+    () => derive(party, ITEMS, coverEach, verdictFor),
+    [party, coverEach]
   );
 
-  const plates = useMemo(
-    () => Object.values(counts).reduce((a, b) => a + b, 0),
-    [counts]
-  );
+  const isTable = party.activeId === TABLE;
+  const activeLine = d.lines.find((l) => l.id === party.activeId) || d.lines[0];
 
-  const ratio = paid > 0 ? eaten / paid : 0;
-  const pnl = eaten - paid;
-  const verdict = VERDICTS.find((v) => ratio < v.max) || VERDICTS[VERDICTS.length - 1];
-  const started = plates > 0;
+  // The board shows whichever book is selected: one diner's, or the table's.
+  const view = isTable
+    ? {
+        name: "The Table",
+        eaten: d.table.eaten,
+        paid: d.table.paid,
+        plates: d.table.plates,
+        ratio: d.table.ratio,
+        pnl: d.table.pnl,
+        verdict: d.table.verdict,
+        started: d.table.started,
+      }
+    : {
+        name: activeLine.name,
+        eaten: activeLine.eaten,
+        paid: activeLine.paid,
+        plates: activeLine.ownPlates,
+        ratio: activeLine.ratio,
+        pnl: activeLine.pnl,
+        verdict: activeLine.verdict,
+        started: activeLine.started,
+      };
 
-  // Highest-contributing item, by total value not by count.
+  // Biggest single contributor in the current view, by value not by count.
   const mvp = useMemo(() => {
+    const bucket = isTable ? party.counts[TABLE] || {} : activeLine.own;
     let best = null;
     for (const it of ITEMS) {
-      const c = counts[it.id] || 0;
+      const c = bucket[it.id] || 0;
       if (!c) continue;
       const contrib = c * it.v;
       if (!best || contrib > best.contrib) best = { ...it, c, contrib };
     }
     return best;
-  }, [counts]);
-
-  const logged = useMemo(
-    () =>
-      ITEMS.filter((it) => counts[it.id]).sort(
-        (a, b) => counts[b.id] * b.v - counts[a.id] * a.v
-      ),
-    [counts]
-  );
+  }, [isTable, party.counts, activeLine]);
 
   // Re-key the P&L number on change so the tick animation replays.
   useEffect(() => {
@@ -59,18 +87,78 @@ export default function GrillExchange() {
       return;
     }
     setFlash((f) => f + 1);
-  }, [eaten]);
+  }, [d.table.eaten]);
 
-  const bump = (id, delta) =>
-    setCounts((c) => {
-      const next = Math.max(0, (c[id] || 0) + delta);
-      const copy = { ...c };
-      if (next === 0) delete copy[id];
-      else copy[id] = next;
-      return copy;
+  useEffect(() => {
+    if (!note) return;
+    const t = setTimeout(() => setNote(""), 2600);
+    return () => clearTimeout(t);
+  }, [note]);
+
+  // Object URLs are revoked when the sheet closes or is replaced.
+  useEffect(() => () => sheet && URL.revokeObjectURL(sheet.url), [sheet]);
+
+  useEffect(() => {
+    if (!sheet) return;
+    const onKey = (e) => e.key === "Escape" && setSheet(null);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [sheet]);
+
+  const bump = (itemId, delta) =>
+    dispatch({ type: "bump", owner: party.activeId, itemId, delta });
+
+  const openReceipt = useCallback(async () => {
+    setBusy(true);
+    try {
+      await fontsReady();
+      const canvas = drawReceipt(d, {
+        cover: coverEach,
+        minutes,
+        mode,
+        when: stamp(),
+      });
+      const blob = await canvasToBlob(canvas);
+      setSheet({ url: URL.createObjectURL(blob), blob });
+    } finally {
+      setBusy(false);
+    }
+  }, [d, coverEach, minutes, mode]);
+
+  const shareReceipt = async () => {
+    if (!sheet) return;
+    const file = new File([sheet.blob], "grill-exchange-receipt.png", {
+      type: "image/png",
     });
+    try {
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: "The Grill Exchange" });
+        return;
+      }
+      if (navigator.clipboard && window.ClipboardItem) {
+        await navigator.clipboard.write([
+          new ClipboardItem({ "image/png": sheet.blob }),
+        ]);
+        setNote("Copied to clipboard");
+        return;
+      }
+      downloadReceipt();
+    } catch (err) {
+      // AbortError just means the user dismissed the OS share sheet.
+      if (err && err.name !== "AbortError") downloadReceipt();
+    }
+  };
 
-  const tone = !started ? "idle" : verdict.tone;
+  const downloadReceipt = () => {
+    if (!sheet) return;
+    const a = document.createElement("a");
+    a.href = sheet.url;
+    a.download = "grill-exchange-receipt.png";
+    a.click();
+    setNote("Saved");
+  };
+
+  const tone = !view.started ? "idle" : view.verdict.tone;
   const visible = ITEMS.filter((it) => it.m.includes(mode));
   const cats = CAT_ORDER[mode].filter((c) => visible.some((it) => it.cat === c));
 
@@ -105,47 +193,138 @@ export default function GrillExchange() {
       {/* ---- signature: the position board ---- */}
       <section className={"gx-board t-" + tone} aria-live="polite">
         <div className="gx-board-head">
-          <span className="gx-label">Position</span>
-          <span className="gx-label">{started ? ratio.toFixed(2) + "× cover" : "—"}</span>
+          <span className="gx-label">{isTable ? "The Book" : view.name}</span>
+          <span className="gx-label">
+            {view.started ? view.ratio.toFixed(2) + "× cover" : "—"}
+          </span>
         </div>
 
         <div className="gx-pnl" key={flash}>
-          {started ? (pnl >= 0 ? "+" : "−") + money(Math.abs(pnl)).slice(1) : "$0.00"}
+          {view.started
+            ? (view.pnl >= 0 ? "+" : "−") + money(Math.abs(view.pnl)).slice(1)
+            : "$0.00"}
         </div>
 
         <div
           className="gx-bar"
           role="img"
-          aria-label={`${Math.round(ratio * 100)} percent of cover recovered`}
+          aria-label={`${Math.round(view.ratio * 100)} percent of cover recovered`}
         >
-          <div className="gx-bar-fill" style={{ width: Math.min(ratio, 1) * 100 + "%" }} />
-          {ratio > 1 && (
+          <div
+            className="gx-bar-fill"
+            style={{ width: Math.min(view.ratio, 1) * 100 + "%" }}
+          />
+          {view.ratio > 1 && (
             <div
               className="gx-bar-over"
-              style={{ width: Math.min((ratio - 1) / 1.5, 1) * 100 + "%" }}
+              style={{ width: Math.min((view.ratio - 1) / 1.5, 1) * 100 + "%" }}
             />
           )}
           <div className="gx-bar-mark" />
         </div>
 
-        <div className="gx-verdict">{started ? verdict.t : "No Position Yet"}</div>
+        <div className="gx-verdict">
+          {view.started ? view.verdict.t : "No Position Yet"}
+        </div>
         <p className="gx-quip">
-          {started ? verdict.s : "Tap what hits the grill. The board updates as you eat."}
+          {view.started
+            ? view.verdict.s
+            : isTable
+            ? "Shared plates land here and split evenly across the party."
+            : "Tap what hits the grill. The board updates as you eat."}
         </p>
 
         <div className="gx-stats">
-          <Stat k="Eaten" v={money(eaten)} />
-          <Stat k="Paid" v={money(paid)} />
-          <Stat k="Plates" v={String(plates)} />
-          <Stat k="Pace" v={minutes > 0 ? money(eaten / minutes) + "/min" : "—"} />
+          <Stat k="Eaten" v={money(view.eaten)} />
+          <Stat k="Paid" v={money(view.paid)} />
+          <Stat k="Plates" v={String(view.plates)} />
+          <Stat k="Pace" v={minutes > 0 ? money(view.eaten / minutes) + "/min" : "—"} />
         </div>
 
-        {started && ratio < 1 && (
+        {view.started && view.ratio < 1 && (
           <div className="gx-todo">
-            {money(paid - eaten)} to break even
+            {money(view.paid - view.eaten)} to break even
             {mvp
-              ? ` · about ${Math.ceil((paid - eaten) / mvp.v)} more ${mvp.n.toLowerCase()}`
+              ? ` · about ${Math.ceil((view.paid - view.eaten) / mvp.v)} more ${mvp.n.toLowerCase()}`
               : ""}
+          </div>
+        )}
+      </section>
+
+      {/* ---- the party ---- */}
+      <section className="gx-party">
+        <div className="gx-cat-head">
+          <span className="gx-cat-name">Party</span>
+          <span className="gx-rule" />
+          <button
+            className="gx-add"
+            onClick={() => dispatch({ type: "add_person" })}
+            disabled={party.people.length >= 12}
+          >
+            + Diner
+          </button>
+        </div>
+
+        <div className="gx-chips" role="tablist" aria-label="Whose plate">
+          {d.lines.map((l) => (
+            <button
+              key={l.id}
+              role="tab"
+              aria-selected={party.activeId === l.id}
+              className={
+                "gx-chip" +
+                (party.activeId === l.id ? " on" : "") +
+                (l.started ? " t-" + l.verdict.tone : "")
+              }
+              onClick={() => dispatch({ type: "set_active", id: l.id })}
+            >
+              <span className="gx-chip-n">{l.name}</span>
+              <span className="gx-chip-v">
+                {l.started ? l.ratio.toFixed(2) + "×" : "—"}
+              </span>
+            </button>
+          ))}
+
+          <button
+            role="tab"
+            aria-selected={isTable}
+            className={"gx-chip gx-chip-table" + (isTable ? " on" : "")}
+            onClick={() => dispatch({ type: "set_active", id: TABLE })}
+          >
+            <span className="gx-chip-n">Table</span>
+            <span className="gx-chip-v">
+              {d.shared.plates ? money(d.shared.value) : "shared"}
+            </span>
+          </button>
+        </div>
+
+        {isTable ? (
+          <p className="gx-hint">
+            Plates logged here belong to nobody in particular. Their value splits
+            evenly across all {d.lines.length}.
+          </p>
+        ) : (
+          <div className="gx-edit">
+            <input
+              className="gx-name-in"
+              value={activeLine.name}
+              maxLength={18}
+              onChange={(e) =>
+                dispatch({
+                  type: "rename_person",
+                  id: activeLine.id,
+                  name: e.target.value,
+                })
+              }
+              aria-label="Diner name"
+            />
+            <button
+              className="gx-drop"
+              onClick={() => dispatch({ type: "remove_person", id: activeLine.id })}
+              disabled={party.people.length <= 1}
+            >
+              Remove
+            </button>
           </div>
         )}
       </section>
@@ -166,22 +345,20 @@ export default function GrillExchange() {
         </label>
 
         <Stepper
-          label="Diners"
-          value={diners}
-          fmt={(v) => String(v)}
-          onChange={(d) => setDiners((v) => Math.max(1, Math.min(20, v + d)))}
-        />
-
-        <Stepper
           label="Minutes"
           value={minutes}
           fmt={(v) => v + "m"}
-          onChange={(d) => setMinutes((v) => Math.max(15, Math.min(240, v + d * 15)))}
+          onChange={(delta) =>
+            setMinutes((v) => Math.max(15, Math.min(240, v + delta * 15)))
+          }
         />
       </section>
 
       {/* ---- the floor ---- */}
       <section className="gx-floor">
+        <p className="gx-logging">
+          Logging to <strong>{isTable ? "the table" : activeLine.name}</strong>
+        </p>
         {cats.map((cat) => (
           <div key={cat} className="gx-cat">
             <div className="gx-cat-head">
@@ -192,19 +369,20 @@ export default function GrillExchange() {
               {visible
                 .filter((it) => it.cat === cat)
                 .map((it) => {
-                  const c = counts[it.id] || 0;
+                  const c = ownerCount(party.counts, party.activeId, it.id);
                   return (
                     <div key={it.id} className={"gx-card" + (c ? " held" : "")}>
                       <button
                         className="gx-card-hit"
                         onClick={() => bump(it.id, 1)}
-                        aria-label={`Add ${it.n}, ${money(it.v)} value`}
+                        aria-label={`Add ${it.n}, ${money(it.v)} value, to ${
+                          isTable ? "the table" : activeLine.name
+                        }`}
                       >
                         <span className="gx-e" aria-hidden="true">
                           {it.e}
                         </span>
                         <span className="gx-n">{it.n}</span>
-                        <span className="gx-sub">{it.sub}</span>
                         <span className="gx-v">{money(it.v)}</span>
                       </button>
                       {c > 0 && (
@@ -227,34 +405,88 @@ export default function GrillExchange() {
         ))}
       </section>
 
-      {/* ---- receipt ---- */}
-      {started && (
+      {/* ---- settlement ---- */}
+      {d.table.started && (
         <section className="gx-receipt">
           <div className="gx-cat-head">
-            <span className="gx-cat-name">Filled</span>
+            <span className="gx-cat-name">Settlement</span>
             <span className="gx-rule" />
           </div>
-          {logged.map((it) => (
-            <div key={it.id} className="gx-row">
-              <span className="gx-row-n">
-                {it.e} {it.n} <em>×{counts[it.id]}</em>
-              </span>
-              <span className="gx-dots" />
-              <span className="gx-row-v">{money(counts[it.id] * it.v)}</span>
+
+          {d.lines.map((l) => (
+            <div key={l.id} className="gx-book">
+              <div className="gx-book-head">
+                <span className="gx-book-n">{l.name}</span>
+                <span className={"gx-book-r" + (l.started ? " t-" + l.verdict.tone : "")}>
+                  {l.started ? l.ratio.toFixed(2) + "×" : "—"}
+                </span>
+              </div>
+              {l.rows.map((r) => (
+                <div key={r.item.id} className="gx-row">
+                  <span className="gx-row-n">
+                    {r.item.e} {r.item.n} <em>×{r.c}</em>
+                  </span>
+                  <span className="gx-dots" />
+                  <span className="gx-row-v">{money(r.value)}</span>
+                </div>
+              ))}
+              {l.sharedEach > 0 && (
+                <div className="gx-row gx-row-dim">
+                  <span className="gx-row-n">share of the table</span>
+                  <span className="gx-dots" />
+                  <span className="gx-row-v">{money(l.sharedEach)}</span>
+                </div>
+              )}
+              {!l.started && <div className="gx-row gx-row-dim">nothing logged</div>}
+              <div className="gx-book-foot">
+                <span className={l.started ? "t-" + l.verdict.tone : ""}>
+                  {l.started ? l.verdict.t : "No position"}
+                </span>
+                <span>{(l.pnl >= 0 ? "+" : "−") + money(Math.abs(l.pnl))}</span>
+              </div>
             </div>
           ))}
-          {mvp && (
-            <div className="gx-mvp">
-              Carried by{" "}
-              <strong>
-                {mvp.e} {mvp.n}
-              </strong>{" "}
-              — {money(mvp.contrib)} of your total
+
+          {d.shared.rows.length > 0 && (
+            <div className="gx-book">
+              <div className="gx-book-head">
+                <span className="gx-book-n">Shared</span>
+                <span className="gx-book-r">split {d.lines.length} ways</span>
+              </div>
+              {d.shared.rows.map((r) => (
+                <div key={r.item.id} className="gx-row">
+                  <span className="gx-row-n">
+                    {r.item.e} {r.item.n} <em>×{r.c}</em>
+                  </span>
+                  <span className="gx-dots" />
+                  <span className="gx-row-v">{money(r.value)}</span>
+                </div>
+              ))}
             </div>
           )}
-          <button className="gx-reset" onClick={() => setCounts({})}>
-            Clear the table
-          </button>
+
+          <div className="gx-total">
+            <span>The book</span>
+            <span>
+              {money(d.table.eaten)} on {money(d.table.paid)}
+            </span>
+          </div>
+
+          {d.table.topLine && d.lines.length > 1 && d.table.topLine.eaten > 0 && (
+            <div className="gx-mvp">
+              Heaviest position: <strong>{d.table.topLine.name}</strong> at{" "}
+              {money(d.table.topLine.eaten)}
+            </div>
+          )}
+
+          <div className="gx-acts">
+            <button className="gx-share" onClick={openReceipt} disabled={busy}>
+              {busy ? "Drawing…" : "Settle up — receipt"}
+            </button>
+            <button className="gx-reset" onClick={() => dispatch({ type: "clear" })}>
+              Clear the table
+            </button>
+          </div>
         </section>
       )}
 
@@ -262,6 +494,37 @@ export default function GrillExchange() {
         Values are typical à-la-carte prices for one AYCE-sized plate. Your mileage, and
         your restaurant, will vary.
       </footer>
+
+      {sheet && (
+        <div
+          className="gx-sheet"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Receipt"
+          onClick={() => setSheet(null)}
+        >
+          <div className="gx-sheet-in" onClick={(e) => e.stopPropagation()}>
+            <img className="gx-sheet-img" src={sheet.url} alt="Receipt for this meal" />
+            <div className="gx-sheet-acts">
+              <button className="gx-share" onClick={shareReceipt}>
+                Share
+              </button>
+              <button className="gx-reset" onClick={downloadReceipt}>
+                Save PNG
+              </button>
+              <button className="gx-reset" onClick={() => setSheet(null)}>
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {note && (
+        <div className="gx-note" role="status">
+          {note}
+        </div>
+      )}
     </div>
   );
 }

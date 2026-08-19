@@ -27,28 +27,60 @@ target. If a feature idea needs that to work, the feature is wrong.
 | File | What it holds |
 |---|---|
 | `src/menu.js` | All menu data, category ordering, verdict tiers. The only file you touch to retune values or add items. |
-| `src/GrillExchange.jsx` | The single component. All state, all math, all markup. |
+| `src/party.js` | Party reducer + all the per-person money math. Pure, no React, no menu import — so it can be unit-tested directly under node. |
+| `src/receipt.js` | Canvas renderer for the shareable receipt. |
+| `src/GrillExchange.jsx` | The component. Wiring and markup. |
 | `src/GrillExchange.css` | All styling, scoped under `.gx-root`. |
 | `src/main.jsx` | Entry point. |
 
-State lives in one component: `counts` (an `{itemId: n}` map), plus `cover`,
-`diners`, `minutes`, `mode`. Everything else is derived in `useMemo`. If this
-grows past ~2 more features, `counts` should move to a `useReducer` before it
-gets tangled — not before.
+Party state lives in a `useReducer` in `party.js`:
+
+```
+people   [{ id, name }]              the party, in seating order
+activeId whose plate taps land on — a person id, or TABLE
+counts   { [ownerId]: { [itemId]: n } }
+seq      monotonic id source
+```
+
+`cover`, `minutes` and `mode` stay as plain `useState` — they don't interact
+with anything. `derive()` turns party state into per-person lines plus the
+table's book; everything the UI and receipt render comes from that one call.
+
+The reducer must stay **pure** — StrictMode double-invokes it in dev. That is
+why ids come from `seq` and not `Date.now()` or `Math.random()`.
 
 ## Domain notes
 
 - `v` on each item is **the value of one AYCE-sized plate**, not the full
-  a-la-carte menu price. AYCE portions are ~60-70% of a menu plate. Using menu
-  prices puts everyone at 3x and the app stops discriminating between diners.
-  This is the biggest source of error in the whole thing.
+  a-la-carte menu price. An AYCE plate is 3-4 oz of protein; an a-la-carte
+  order is 8 oz for most cuts, 10-12 oz for galbi, 16 oz for ribeye and pork
+  jowl. So the conversion is `price-per-ounce * 3.5`, landing at 22-45% of
+  menu price depending on the cut — **not** a flat 60-70%. That flat
+  assumption was the original bug: it put everyone at 3x and left two verdict
+  tiers unreachable. Full method and source anchors are in `src/menu.js`.
+- Drinks are the one exception: alcohol is essentially never inside an AYCE
+  cover, so `v` for those is the real menu price. Note the model does not add
+  them to `paid`, so logging a soju currently reads as free recovered value.
+  Unresolved — see "Not yet decided".
 - `ratio = eaten / paid` drives everything: the verdict tier, the color tone,
   the progress bar. Break-even is 1.0.
 - Mode tabs filter which items are *visible*; they do not reset `counts`.
   Combo KBBQ+hotpot restaurants exist and switching tabs shouldn't wipe a log.
+- `TABLE` is a reserved owner id for plates nobody can claim — the brisket
+  everyone picked at. Its value splits evenly across the party. Without it,
+  shared food gets assigned to whoever happened to tap and the per-person P&L
+  becomes fiction. Adding or removing a diner re-splits it automatically.
+- Every diner gets their own verdict against their own cover; the table gets a
+  pooled one. `derive()` guarantees the per-person totals sum to the book
+  exactly, so a receipt never shows money that came from nowhere.
+- The party can never reach zero people — `paid` would divide by nothing.
 - `VERDICTS` must stay sorted ascending by `max` — lookup takes the first match.
 - `tone` (`loss` / `flat` / `win`) is the color system. Adding a tier means
   picking one of those three, not inventing a fourth color.
+- **CSS trap:** the reset `.gx-root button{background:none}` is specificity
+  (0,1,1) and beats any bare single-class rule like `.gx-share{background:…}`.
+  A button that paints a background must be written `.gx-root .gx-share{…}` or
+  it silently renders transparent.
 
 ## Voice
 
@@ -60,20 +92,28 @@ much!!" No exclamation marks anywhere in the UI.
 
 ## Open decisions (unbuilt, roughly in priority order)
 
-1. **Shareable receipt.** Render the verdict card to an image so it can go in
-   a group chat. Highest leverage — this is the part people would actually
-   send to someone. Probably `html-to-image` or a canvas draw.
+1. ~~**Shareable receipt.**~~ Done Aug 2026. `receipt.js` draws a settlement to
+   a canvas and hands back a PNG; the app offers Web Share (falls back to
+   clipboard, then download). Canvas rather than `html-to-image` so the zero-
+   dependency stance holds and the share image can use a fixed portrait layout
+   instead of fighting the responsive one. Callers must await `fontsReady()`
+   first or it renders in Times.
 2. **Persistence + history.** Currently session-only. Saving meals unlocks the
    interesting version: lifetime P&L, win rate, best table ever. Needs a
    storage layer; `localStorage` is fine to start.
 3. **Restaurant profiles.** Cover charges vary a lot by city. A saved list
    beats retyping the cover every time. Depends on (2).
-4. **Recalibrate `menu.js` against real menus.** Should honestly happen before
-   any of the above — right now every value is an educated guess.
+4. ~~**Recalibrate `menu.js` against real menus.**~~ Done Aug 2026. Values are
+   now derived from real a-la-carte menus and published AYCE portion sizes
+   rather than guessed; verdict ceilings were stretched to match the honest
+   distribution. Revisit if you eat somewhere the numbers feel wrong.
 
 ## Not yet decided
 
 - Whether this stays a single-page toy or gets a backend.
-- Whether "diners" should pool one shared log (current behavior) or track
-  per-person columns. Per-person is more accurate for splitting blame but a
-  lot more UI.
+- ~~Whether "diners" should pool one shared log or track per-person columns.~~
+  Resolved Aug 2026: per-person, with a `TABLE` bucket for genuinely shared
+  plates. The UI cost was one chip row and an active-owner selector.
+- Whether drinks should count toward `paid` as well as `eaten`. You buy them
+  on top of the cover, so logging one is currently pure upside, which is
+  wrong. Fixing it means `paid` stops being `cover * diners`.
