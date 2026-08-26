@@ -1,5 +1,6 @@
 import { useState, useMemo, useRef, useEffect, useReducer, useCallback } from "react";
-import { ITEMS, CAT_ORDER, VERDICTS } from "./menu.js";
+import { CAT_ORDER, VERDICTS, priceItems } from "./menu.js";
+import { loadMarket, fallbackMarket, marketLabel } from "./market.js";
 import {
   TABLE,
   money,
@@ -18,6 +19,7 @@ import {
   sojuTier,
 } from "./easterEggs.js";
 import { confettiBurst } from "./confetti.js";
+import { noteContext, topNote } from "./analyst.js";
 import "./GrillExchange.css";
 
 const verdictFor = (ratio) =>
@@ -44,6 +46,16 @@ export default function GrillExchange() {
   const [famousHit, setFamousHit] = useState(0);
   const [aside, setAside] = useState(null);
 
+  // Market snapshot. Starts at the baked-in floor so the first paint carries
+  // real numbers, then upgrades to cache or live. Never blocks render.
+  const [market, setMarket] = useState(fallbackMarket);
+
+  // Session clock for the analyst desk. Lives in refs and an effect, never in
+  // the reducer — the reducer stays pure and free of Date.now().
+  const openedAt = useRef(null); // first plate of the session
+  const lastFillAt = useRef(null); // most recent change to the book
+  const [clock, setClock] = useState(0); // slow tick so idle notes re-evaluate
+
   const firstRun = useRef(true);
   const celebrated = useRef(new Set());
   const cancelConfetti = useRef(null);
@@ -51,9 +63,22 @@ export default function GrillExchange() {
   const asideSeq = useRef(0);
   const coverEach = parseFloat(cover) || 0;
 
+  // One pull per mount; the module caches for a day. Aborted on unmount so a
+  // slow network can't set state after teardown.
+  useEffect(() => {
+    const ac = new AbortController();
+    loadMarket({ signal: ac.signal })
+      .then((m) => setMarket(m))
+      .catch(() => {}); // loadMarket already degrades to the floor
+    return () => ac.abort();
+  }, []);
+
+  // Every price on the board, resolved against the current snapshot.
+  const items = useMemo(() => priceItems(market), [market]);
+
   const d = useMemo(
-    () => derive(party, ITEMS, coverEach, verdictFor),
-    [party, coverEach]
+    () => derive(party, items, coverEach, verdictFor),
+    [party, items, coverEach]
   );
 
   const isTable = party.activeId === TABLE;
@@ -86,14 +111,77 @@ export default function GrillExchange() {
   const mvp = useMemo(() => {
     const bucket = isTable ? party.counts[TABLE] || {} : activeLine.own;
     let best = null;
-    for (const it of ITEMS) {
+    for (const it of items) {
       const c = bucket[it.id] || 0;
       if (!c) continue;
       const contrib = c * it.v;
       if (!best || contrib > best.contrib) best = { ...it, c, contrib };
     }
     return best;
-  }, [isTable, party.counts, activeLine]);
+  }, [isTable, party.counts, activeLine, items]);
+
+  // The desk's read on whichever book is on screen. Scope follows the view:
+  // looking at a diner gets diner notes, looking at the table gets table notes.
+  const deskNote = useMemo(() => {
+    const mins = (from) =>
+      from === null ? 0 : Math.max(0, (Date.now() - from) / 60000);
+
+    // Table scope reasons over everything ordered, every owner pooled.
+    const merged = {};
+    if (isTable) {
+      for (const b of Object.values(party.counts)) {
+        for (const [id, c] of Object.entries(b || {})) {
+          merged[id] = (merged[id] || 0) + c;
+        }
+      }
+    }
+
+    const ranked = [...d.lines].sort((a, b) => b.eaten - a.eaten);
+    const elapsedMins = mins(openedAt.current);
+
+    const ctx = noteContext({
+      scope: isTable ? "table" : "diner",
+      bucket: isTable ? merged : activeLine.own,
+      value: view.eaten,
+      paid: view.paid,
+      plates: view.plates,
+      items,
+      people: d.lines.length,
+      tableRatio: d.table.ratio,
+      tablePlates: d.table.plates,
+      sharedPlates: d.shared.plates,
+      ratios: d.lines.map((l) => l.ratio),
+      rank: isTable ? 1 : ranked.findIndex((l) => l.id === activeLine.id) + 1,
+      elapsedMins,
+      idleMins: mins(lastFillAt.current),
+      minsLeft: minutes > 0 ? minutes - elapsedMins : Infinity,
+      mode,
+    });
+
+    return topNote(ctx);
+    // `clock` is a deliberate dependency: it is what makes idle notes re-run.
+  }, [isTable, party.counts, activeLine, items, view, d, minutes, mode, clock]);
+
+  // Stamp the session open and every fill. Clearing the board resets both, so
+  // a second round starts a fresh session rather than inheriting a stale open.
+  useEffect(() => {
+    if (d.table.plates === 0) {
+      openedAt.current = null;
+      lastFillAt.current = null;
+      return;
+    }
+    const now = Date.now();
+    if (openedAt.current === null) openedAt.current = now;
+    lastFillAt.current = now;
+  }, [d.table.plates]);
+
+  // Idle notes need the clock to move even when nothing is tapped. Only runs
+  // while a session is open, so an untouched board costs nothing.
+  useEffect(() => {
+    if (d.table.plates === 0) return;
+    const t = setInterval(() => setClock((n) => n + 1), 20000);
+    return () => clearInterval(t);
+  }, [d.table.plates === 0]);
 
   // Re-key the P&L number on change so the tick animation replays.
   useEffect(() => {
@@ -221,7 +309,7 @@ export default function GrillExchange() {
   };
 
   const tone = !view.started ? "idle" : view.verdict.tone;
-  const visible = ITEMS.filter((it) => it.m.includes(mode));
+  const visible = items.filter((it) => it.m.includes(mode));
   const cats = CAT_ORDER[mode].filter((c) => visible.some((it) => it.cat === c));
 
   return (
@@ -231,6 +319,9 @@ export default function GrillExchange() {
         <div className="gx-mast-l">
           <span className="gx-dot" />
           <span className="gx-mark">THE GRILL EXCHANGE</span>
+          <span className="gx-tape" title="Prices are US Bureau of Labor Statistics average retail, per pound.">
+            {marketLabel(market)}
+          </span>
         </div>
         <div className="gx-seg" role="tablist" aria-label="Menu type">
           <button
@@ -309,6 +400,19 @@ export default function GrillExchange() {
             {mvp
               ? ` · about ${Math.ceil((view.paid - view.eaten) / mvp.v)} more ${mvp.n.toLowerCase()}`
               : ""}
+          </div>
+        )}
+
+        {/* ---- analyst notes: the desk's read on the current book ---- */}
+        {deskNote && (
+          <div
+            className="gx-desk"
+            key={deskNote.id}
+            role="status"
+            aria-live="polite"
+          >
+            <span className="gx-desk-k">Analyst note</span>
+            <p className="gx-desk-t">{deskNote.line}</p>
           </div>
         )}
       </section>
@@ -449,7 +553,17 @@ export default function GrillExchange() {
                           {it.e}
                         </span>
                         <span className="gx-n">{it.n}</span>
-                        <span className="gx-v">{money(it.v)}</span>
+                        <span className="gx-v">
+                          {money(it.v)}
+                          {it.est && (
+                            <span
+                              className="gx-est"
+                              title="Estimated — no public price series covers this item"
+                            >
+                              e
+                            </span>
+                          )}
+                        </span>
                       </button>
                       {c > 0 && (
                         <>

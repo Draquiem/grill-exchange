@@ -29,6 +29,12 @@
 @keyframes gx-pulse{70%{box-shadow:0 0 0 7px rgba(255,92,43,0);}100%{box-shadow:0 0 0 0 rgba(255,92,43,0);}}
 .gx-mark{font-size:11px;letter-spacing:.16em;font-weight:700;white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis;}
+/* provenance tape: where the numbers came from, and how fresh they are */
+.gx-root .gx-tape{font-size:9.5px;letter-spacing:.08em;color:var(--marble);
+  padding-left:8px;margin-left:2px;border-left:1px solid var(--ash);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+@media (max-width:560px){.gx-root .gx-tape{display:none;}}
+
 .gx-seg{display:flex;border:1px solid var(--ash);border-radius:999px;padding:2px;flex:none;}
 .gx-seg-b{font-size:10px;letter-spacing:.1em;font-weight:700;padding:6px 12px;border-radius:999px;
   color:var(--marble);transition:background .18s,color .18s;}
@@ -81,6 +87,18 @@
 .gx-todo{margin-top:12px;font-size:11px;color:var(--marble);
   border-left:2px solid var(--ember);padding-left:9px;line-height:1.45;}
 
+/* analyst notes — the desk's running read on the current book.
+   Base state is deliberately visible: the keyframes only ADD motion, so the
+   reduced-motion reset above leaves a perfectly readable note behind. */
+.gx-desk{margin-top:12px;padding:9px 11px;border:1px solid var(--ash);
+  border-radius:8px;background:var(--slab);opacity:1;
+  animation:gx-desk-in .5s ease-out;}
+.gx-desk-k{display:block;font-size:8.5px;letter-spacing:.18em;
+  text-transform:uppercase;color:var(--marble);margin-bottom:4px;}
+.gx-desk-t{font-size:12px;line-height:1.5;color:var(--bone);}
+@keyframes gx-desk-in{from{opacity:0;transform:translateY(-3px);}
+  to{opacity:1;transform:none;}}
+
 /* terms */
 .gx-terms{display:grid;grid-template-columns:1.4fr 1fr;gap:8px;margin:0 16px 22px;}
 .gx-term{display:flex;flex-direction:column;gap:6px;background:var(--slab);
@@ -113,6 +131,8 @@
 .gx-n{font-size:11.5px;font-weight:700;line-height:1.25;margin-bottom:5px;}
 .gx-v{font-size:11px;color:var(--marble);font-weight:500;margin-top:auto;}
 .gx-card.held .gx-v{color:var(--ember);}
+/* `e` = estimated: no public series covers this cut, so the price is hand-set */
+.gx-root .gx-est{font-size:8px;vertical-align:super;margin-left:2px;opacity:.65;}
 .gx-qty{position:absolute;top:8px;right:9px;font-size:12px;font-weight:700;color:var(--ember);}
 .gx-minus{position:absolute;bottom:6px;right:6px;width:24px;height:24px;border-radius:7px;
   background:var(--ash);font-size:14px;line-height:1;color:var(--bone);}
